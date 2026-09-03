@@ -1,0 +1,47 @@
+schema_version = 1
+
+[project]
+package = "lilygo-ui-files"
+version = "0.1.0"
+app_id = "cc.lilygo.ui.Files"
+title = "Files"
+summary = "Browse and manage files on LILYGO UI."
+description = "A file manager for LILYGO UI devices that supports directory navigation, search, text preview, and folder creation."
+license = "LicenseRef-proprietary"
+source_repo = "https://github.com/LILYGO-UI/files"
+homepage = "https://github.com/LILYGO-UI/files"
+categories = ["System", "Utilities"]
+
+[[project.authors]]
+name = "LILYGO"
+github = "LILYGO"
+
+[project.assets]
+icon = "assets/app-icon.png"
+
+[[project.assets.screenshots]]
+path = "assets/previews/files-portrait.png"
+caption = "Files home screen"
+
+[[project.permissions]]
+id = "filesystem"
+access = "read-write"
+scope = "shared-data"
+reason = "Browse and manage files selected by the user."
+
+[project.compatibility]
+architectures = ["arm64"]
+min_appkit_version = "0.1.0"
+
+[project.launcher]
+order = 30
+
+[build]
+host_preset = "host-simulator"
+cross_preset = "cm0-cross"
+package_dir = "dist"
+
+[deploy]
+host = "raspberrypi.local"
+user = "pi"
+port = 22
