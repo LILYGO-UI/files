@@ -28,17 +28,27 @@ Files 页面采用 C++17 的 `View -> ViewModel -> Model` 依赖方向。`FilesM
 
 ## 准备 AppKit
 
-将此目录纳入 Git 仓库后，初始化 AppKit submodule：
+开发前先初始化仓库锁定的 AppKit submodule：
 
 ```sh
 git submodule update --init --recursive
 ```
 
-本地检出时，可以通过 `LilyGoUI_DIR` 指向另一个 AppKit 源码树：
+默认 preset 将 `LilyGoUI_DIR` 指向 `third_party/cm0-appkit`。应用通过
+`find_package(LilyGoUI CONFIG REQUIRED)` 加载源码 SDK 配置，由 SDK 构建
+AppKit/LVGL 静态库并链接进应用。应用 CMake 不得枚举 SDK 私有源文件或引用
+其私有头文件。AppKit 代码更新后需要更新子模块版本并重新构建应用。
+
+`lilygo-ui-appkit-dev` 0.1.0 或更新版本同时提供源码 SDK、公共字体和许可证，
+应用不重复打包字体。`lpm.toml` 的 `min_appkit_version` 指定该软件包的最低版本。
+AppKit/LVGL 仍静态链接进每个应用，该软件包不包含 AppKit/LVGL 动态库。
+交叉编译 sysroot 只需 BSP 和系统开发依赖，不需要预装 AppKit SDK。
+主机预览使用源码 SDK 中的字体资源。
+
+可通过以下方式选择独立的 AppKit 源码检出：
 
 ```sh
-cmake --preset host-simulator \
-  -DLilyGoUI_DIR=/path/to/cm0-appkit
+cmake --preset host-simulator -DLilyGoUI_DIR=/path/to/appkit
 ```
 
 ## 主机模拟器
@@ -78,7 +88,7 @@ UI 必须验证的视口为 `568x1232` 竖屏和 `1232x568` 横屏。测试设�
 ## 字体
 
 应用中的所有文本都使用 `lilygo_ui_font_get()`。Inter、Source Han Sans CN 和
-Font Awesome 由共享的 `lilygo-ui-appkit-dev` 运行时软件包提供，本应用不会重复
+Font Awesome 由共享的 `lilygo-ui-appkit-dev` SDK 和字体软件包提供，本应用不会重复
 打包字体文件。
 
 ## 设备软件包

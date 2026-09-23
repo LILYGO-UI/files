@@ -33,18 +33,35 @@ Project-specific architecture and UI requirements are documented in
 
 ## Prepare AppKit
 
-Initialize the AppKit submodule after this directory is in a Git repository:
+AppKit is pinned as the `third_party/cm0-appkit` Git submodule. Initialize it
+before configuring the application:
 
 ```sh
 git submodule update --init --recursive
 ```
 
-For a local checkout, `LilyGoUI_DIR` can point to another AppKit tree:
+The presets select this source SDK with `LilyGoUI_DIR`. Its package config
+builds AppKit and LVGL as static libraries and links them into each application.
+Updating AppKit code requires updating the submodule revision and rebuilding
+the application. A local SDK checkout can be selected explicitly:
 
 ```sh
-cmake --preset host-simulator \
-  -DLilyGoUI_DIR=/path/to/cm0-appkit
+cmake --preset host-simulator -DLilyGoUI_DIR=/path/to/appkit
 ```
+
+Host builds use the SDK's font assets. Devices install `lilygo-ui-appkit-dev`,
+version 0.1.0 or newer, which contains the source SDK and the shared Inter,
+Source Han Sans CN, Font Awesome, and font licenses. Applications do not bundle
+duplicate fonts. AppKit and LVGL remain statically linked into each application;
+the package supplies no AppKit or LVGL shared libraries. The
+`min_appkit_version` field in `lpm.toml` sets this package's minimum version.
+The package also supports build environments using an installed source SDK
+instead of the submodule.
+
+Cross builds require the BSP sysroot and its system development libraries;
+they do not require an AppKit SDK package in the sysroot.
+When returning from a binary SDK build, use a fresh build directory so no old
+imported targets or SDK search paths remain cached.
 
 ## Host simulator
 
@@ -86,7 +103,7 @@ acceptance matrix.
 
 The application uses `lilygo_ui_font_get()` for all text. Inter, Source Han
 Sans CN, and Font Awesome are provided by the shared `lilygo-ui-appkit-dev`
-runtime package; this application does not bundle duplicate font files.
+SDK and font package; this application does not bundle duplicate font files.
 
 ## Device package
 
@@ -109,6 +126,34 @@ dependency are derived from `lpm.toml`.
 On the target, the packaged system configuration sets the file root to
 `/home/pi`. It can be overridden with `--root`, `LILYGO_UI_FILES_ROOT`, or the
 user/system configuration files described above.
+
+## GPU renderer builds
+
+Device rendering is selected at application build time by the source AppKit
+SDK. Use an updated SDK supporting `LILYGO_UI_RENDERER` and a target-matched
+CM0 sysroot with `libgbm-dev`, `libegl-dev`, and `libgles-dev`. The original
+BSP 0.1.0 lacks those GPU development dependencies. The original pinned
+AppKit submodule does not support GPU renderer selection; use a newer source
+SDK explicitly for this build.
+
+Select the SDK source checkout or the directory containing the installed
+source SDK's `LilyGoUIConfig.cmake`:
+
+```sh
+cmake --preset cm0-cross -B build/cm0-opengles \
+  -DLilyGoUI_DIR=/path/to/appkit \
+  -DCMAKE_TOOLCHAIN_FILE=/path/to/cm0-sysroot/usr/share/cm0-bsp/toolchain.cmake \
+  -DLILYGO_UI_RENDERER=opengles
+cmake --build build/cm0-opengles --parallel
+cpack --config build/cm0-opengles/CPackConfig.cmake -B dist/opengles
+```
+
+The executable contains AppKit and LVGL code, and its Debian package declares
+the selected renderer's system graphics dependencies. Keep separate build
+directories for software, OpenGL ES, and experimental NanoVG. Use software
+rendering for host simulator tests. Compare rendering correctness, frame time,
+memory, and repeated application exit/return on the target before changing a
+release renderer.
 
 ## Source layout
 

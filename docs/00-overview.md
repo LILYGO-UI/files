@@ -109,11 +109,22 @@ LVGL 构建，不引入 EEZ 或其他生成式设计源码树。只有确实被�
 
 ## 构建入口
 
-首次使用先初始化 AppKit submodule：
+开发前先初始化仓库锁定的 AppKit submodule：
 
 ```sh
 git submodule update --init --recursive
 ```
+
+默认 preset 将 `LilyGoUI_DIR` 指向 `third_party/cm0-appkit`。应用通过
+`find_package(LilyGoUI CONFIG REQUIRED)` 加载源码 SDK 配置，由 SDK 构建
+AppKit/LVGL 静态库并链接进应用。应用 CMake 不得枚举 SDK 私有源文件或引用
+其私有头文件。AppKit 代码更新后需要更新子模块版本并重新构建应用。
+
+`lilygo-ui-appkit-dev` 0.1.0 或更新版本同时提供源码 SDK、公共字体和许可证，
+应用不重复打包字体。`lpm.toml` 的 `min_appkit_version` 指定该软件包的最低版本。
+AppKit/LVGL 仍静态链接进每个应用，该软件包不包含 AppKit/LVGL 动态库。
+交叉编译 sysroot 只需 BSP 和系统开发依赖，不需要预装 AppKit SDK。
+主机预览使用源码 SDK 中的字体资源。
 
 LPM 是日常入口，CMake presets 是稳定的底层入口：
 
