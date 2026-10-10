@@ -16,9 +16,14 @@ package settings from it. `publish.json` is temporary LPM output and is not a
 project configuration file.
 
 The application operates within one configured filesystem root. It supports
-directory navigation, current-directory search, read-only text preview, and
-creating folders. Copy, rename, move, archive, delete, selection, sort changes,
-and view changes are not currently exposed as user actions.
+directory navigation in icon or list view, sorting, selection, current-directory
+search, read-only text preview, and creating folders. Long-pressing a file or
+folder opens a context menu to copy, move, get info, rename, compress to ZIP,
+duplicate, put the item in a new folder, or delete it; copied items are pasted
+from the more menu. In selection mode a bottom toolbar duplicates, moves, or
+deletes the selected items, and its menu copies them, puts them in a new folder,
+or compresses them into one archive. Sharing, tags, and favorites are not
+provided.
 
 The Files page uses a C++17 `View -> ViewModel -> Model` dependency direction.
 `FilesModel` owns filesystem access and domain rules without depending on

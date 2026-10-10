@@ -4,5 +4,7 @@
 Launcher asset and must be regenerated whenever the source changes.
 
 `previews/files-portrait.png` is the 568x1232 release preview referenced by
-`lpm.toml`. Preview images are publishing assets and are not installed in the
-Debian package.
+`lpm.toml`. The matching `files-landscape.png` preview is 1232x568. The other
+listed images show representative text preview, file operation, new-folder,
+and selection states. Preview images are publishing assets and are not
+installed in the Debian package.

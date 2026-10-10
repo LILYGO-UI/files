@@ -23,6 +23,26 @@ icon = "assets/app-icon.png"
 path = "assets/previews/files-portrait.png"
 caption = "Files home screen"
 
+[[project.assets.screenshots]]
+path = "assets/previews/files-landscape.png"
+caption = "Files home screen in landscape"
+
+[[project.assets.screenshots]]
+path = "assets/previews/files-portrait-preview.png"
+caption = "Read-only text preview"
+
+[[project.assets.screenshots]]
+path = "assets/previews/files-landscape-actions.png"
+caption = "File operations menu"
+
+[[project.assets.screenshots]]
+path = "assets/previews/files-portrait-new-folder.png"
+caption = "Create a new folder"
+
+[[project.assets.screenshots]]
+path = "assets/previews/files-landscape-select-menu.png"
+caption = "Selection operations menu"
+
 [[project.permissions]]
 id = "filesystem"
 access = "read-write"

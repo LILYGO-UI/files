@@ -21,7 +21,14 @@ inline constexpr std::uint32_t color_selected_background  = 0xeaf4ff;
 inline constexpr std::uint32_t color_control_background   = 0xe3e3e8;
 inline constexpr std::uint32_t color_secondary_control    = 0xe5e5ea;
 inline constexpr std::uint32_t color_destructive          = 0xff3b30;
-inline constexpr std::uint32_t color_download_accent      = 0x30b0c7;
+inline constexpr std::uint32_t color_folder_back          = 0x3d9cf0;
+inline constexpr std::uint32_t color_folder_front         = 0x74c0f9;
+inline constexpr std::uint32_t color_folder_highlight     = 0xa6d8fc;
+inline constexpr std::uint32_t color_document_fold        = 0xe5e5ea;
+inline constexpr std::uint32_t color_type_audio           = 0xff2d55;
+inline constexpr std::uint32_t color_type_pdf             = 0xff3b30;
+inline constexpr std::uint32_t color_selection_ring       = 0xc7c7cc;
+inline constexpr std::uint32_t color_shadow               = 0x000000;
 inline constexpr std::uint32_t color_scrim                = 0x000000;
 
 [[nodiscard]] const lv_font_t *font(std::uint32_t size) noexcept;

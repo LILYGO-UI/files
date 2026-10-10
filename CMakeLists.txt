@@ -12,6 +12,7 @@ configure_file(cmake/app_identity.h.in
 
 add_library(lilygo_ui_files_core STATIC
     src/app_config.cpp
+    src/pages/files/files_archive.cpp
     src/pages/files/files_model.cpp)
 target_include_directories(lilygo_ui_files_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}/generated)
@@ -25,6 +26,7 @@ endif()
 add_library(lilygo_ui_files_ui STATIC
     src/app.cpp
     src/components/components.cpp
+    src/pages/files/files_icons.cpp
     src/pages/files/files_view.cpp
     src/pages/files/files_view_model.cpp)
 target_include_directories(lilygo_ui_files_ui PUBLIC
@@ -90,7 +92,8 @@ if(BUILD_TESTING AND NOT CMAKE_CROSSCOMPILING)
             set(_width 1232)
             set(_height 568)
         endif()
-        foreach(scenario IN ITEMS home folder search preview more new-folder)
+        foreach(scenario IN ITEMS home folder search preview more new-folder list select
+                select-menu select-move select-delete actions info move rename delete)
             add_test(NAME files-render-${viewport}-${scenario}
                 COMMAND files-render-ui
                     ${_width} ${_height} ${scenario}
