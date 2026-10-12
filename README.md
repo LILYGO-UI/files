@@ -25,6 +25,25 @@ deletes the selected items, and its menu copies them, puts them in a new folder,
 or compresses them into one archive. Sharing, tags, and favorites are not
 provided.
 
+The top-right More menu includes Help, an in-app, scrollable reference for browsing folders,
+opening and previewing files, searching and sorting, selecting items, and common file operations.
+Closing Help returns to the same directory with its view, sort, search, and scroll state intact.
+
+With a keyboard, the arrow keys move only through the current directory or
+search results: left and right move to the previous or next item, while up and
+down move by a visual grid row in icon view and by list row in list view. At an
+edge, focus remains within the file and folder collection. A short `Enter` opens the focused file or
+folder; holding `Enter` opens that item's detailed operations menu and releasing
+it does not open the item. `Tab` moves between controls, including the search
+entry and its results. The search entry accepts keyboard characters and
+Backspace. Long-pressing search results or items in selection mode keeps the
+existing rule and does not open a context menu. Pressing `Esc` while a More or
+file-operation menu is open closes that menu and keeps the application running.
+
+On the Help page, the arrow keys move focus between the close button and each
+operation section and pan the viewport at the content edges. `Tab`/`Shift-Tab`
+follow the same focus order and scroll the focused section into view.
+
 The Files page uses a C++17 `View -> ViewModel -> Model` dependency direction.
 `FilesModel` owns filesystem access and domain rules without depending on
 LVGL, `FilesViewModel` publishes presentation state through LVGL Subjects, and
@@ -168,6 +187,7 @@ release renderer.
 - `src/pages/files/files_model.cpp`: filesystem access, state, and domain rules
 - `src/pages/files/files_view_model.cpp`: presentation DTOs, commands, and Subjects
 - `src/pages/files/files_view.cpp`: responsive LVGL widgets and event forwarding
+- `src/pages/help/`: model-free, scrollable Help page and its static operation guide
 - `src/components/`: shared semantic styles and Subject lifetime helpers
 - `simulated-home/`: host-only filesystem fixtures for interactive debugging
 - `data/`: generic Launcher, desktop, and AppStream templates plus default config

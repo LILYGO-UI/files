@@ -2,6 +2,7 @@
 
 #include "app_identity.h"
 #include "components/components.hpp"
+#include "pages/help/help_view.hpp"
 #include "pages/files/files_view.hpp"
 #include "pages/files/files_view_model.hpp"
 
@@ -15,16 +16,35 @@ struct AppState {
     std::string configured_root;
     std::unique_ptr<FilesViewModel> view_model;
     std::unique_ptr<FilesView> view;
+    std::unique_ptr<HelpView> help_view;
 };
 
 AppState app_state;
+
+void show_help(void *user_data)
+{
+    auto *state = static_cast<AppState *>(user_data);
+    if (!state) return;
+    if (state->view) state->view->set_visible(false);
+    if (state->help_view) state->help_view->set_visible(true);
+}
+
+void show_files(void *user_data)
+{
+    auto *state = static_cast<AppState *>(user_data);
+    if (!state) return;
+    if (state->help_view) state->help_view->set_visible(false);
+    if (state->view) state->view->set_visible(true);
+}
 
 void app_open(const cm0_app_context_t *context)
 {
     if (!context || !context->root) return;
 
     if (app_state.view) app_state.view->destroy();
+    if (app_state.help_view) app_state.help_view->destroy();
     app_state.view.reset();
+    app_state.help_view.reset();
     app_state.view_model.reset();
 
     const char *root = app_state.configured_root.empty() ? std::getenv("HOME") : app_state.configured_root.c_str();
@@ -35,14 +55,19 @@ void app_open(const cm0_app_context_t *context)
     lv_obj_set_style_bg_opa(context->root, LV_OPA_COVER, 0);
 
     app_state.view_model = std::make_unique<FilesViewModel>(root);
-    app_state.view       = std::make_unique<FilesView>(*app_state.view_model);
+    app_state.help_view = std::make_unique<HelpView>(show_files, &app_state);
+    app_state.help_view->create(context->root);
+    app_state.help_view->set_visible(false);
+    app_state.view = std::make_unique<FilesView>(*app_state.view_model, show_help, &app_state);
     app_state.view->create(context->root);
 }
 
 void app_close()
 {
     if (app_state.view) app_state.view->destroy();
+    if (app_state.help_view) app_state.help_view->destroy();
     app_state.view.reset();
+    app_state.help_view.reset();
     app_state.view_model.reset();
 }
 

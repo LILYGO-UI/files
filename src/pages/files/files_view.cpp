@@ -6,7 +6,9 @@
 #include <cm0/typography.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdio>
+#include <cstring>
 #include <initializer_list>
 #include <string>
 
@@ -110,7 +112,12 @@ const char *name_dialog_hint(FilesScreen screen) noexcept
 
 }  // namespace
 
-FilesView::FilesView(FilesViewModel &view_model) noexcept : view_model_(view_model)
+FilesView *FilesView::key_remap_view_ = nullptr;
+lv_indev_t *FilesView::key_remap_indev_ = nullptr;
+bool FilesView::key_remap_active_ = false;
+
+FilesView::FilesView(FilesViewModel &view_model, FilesHelpCallback help_callback, void *help_user_data) noexcept
+    : view_model_(view_model), help_callback_(help_callback), help_user_data_(help_user_data)
 {
 }
 
@@ -126,6 +133,9 @@ lv_obj_t *FilesView::create(lv_obj_t *parent)
 
     surface_ = components::create_page(parent);
     if (!surface_) return nullptr;
+    visible_ = true;
+    configure_key_remap(true);
+    key_remap_timer_ = lv_timer_create(key_remap_timer_tick, 20, this);
     lv_obj_set_name_static(surface_, "files_surface");
     lv_obj_set_style_pad_bottom(surface_, kHomeIndicatorSpace, 0);
     lv_obj_add_event_cb(surface_, size_changed, LV_EVENT_SIZE_CHANGED, this);
@@ -145,6 +155,12 @@ lv_obj_t *FilesView::create(lv_obj_t *parent)
 
 void FilesView::destroy() noexcept
 {
+    visible_ = false;
+    configure_key_remap(false);
+    if (key_remap_timer_) {
+        lv_timer_delete(key_remap_timer_);
+        key_remap_timer_ = nullptr;
+    }
     if (render_pending_) {
         lv_async_call_cancel(render_async, this);
         render_pending_ = false;
@@ -158,8 +174,27 @@ void FilesView::destroy() noexcept
     frame_   = nullptr;
     clear_page_references();
     render_key_.clear();
+    rendered_screen_ = FilesScreen::Home;
     scroll_key_.clear();
     scroll_y_ = 0;
+}
+
+void FilesView::set_visible(bool visible) noexcept
+{
+    if (!surface_) return;
+    visible_ = visible;
+    if (visible) {
+        lv_obj_clear_flag(surface_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(surface_);
+        configure_key_remap(true);
+        lv_obj_update_layout(surface_);
+        if (lv_group_t *group = lv_group_get_default()) {
+            if (lv_obj_t *more = lv_obj_find_by_name(surface_, "files_more_button")) lv_group_focus_obj(more);
+        }
+    } else {
+        configure_key_remap(false);
+        lv_obj_add_flag(surface_, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 void FilesView::content_changed(lv_observer_t *observer, lv_subject_t *subject)
@@ -187,6 +222,12 @@ void FilesView::place_async(void *user_data)
     view->place_action_menu(true);
 }
 
+void FilesView::key_remap_timer_tick(lv_timer_t *timer)
+{
+    auto *view = static_cast<FilesView *>(lv_timer_get_user_data(timer));
+    if (view && view->visible_) view->configure_key_remap(true);
+}
+
 void FilesView::size_changed(lv_event_t *event)
 {
     auto *view = view_from_event(event);
@@ -205,10 +246,127 @@ void FilesView::more_clicked(lv_event_t *event)
     if (view) view->view_model_.show(FilesScreen::More);
 }
 
+void FilesView::help_clicked(lv_event_t *event)
+{
+    auto *view = view_from_event(event);
+    if (!view) return;
+    // Close the menu before switching surfaces so returning from Help reveals the
+    // same directory page instead of the open pull-down menu.
+    view->view_model_.back();
+    if (view->help_callback_) view->help_callback_(view->help_user_data_);
+}
+
 void FilesView::search_clicked(lv_event_t *event)
 {
     auto *view = view_from_event(event);
     if (view) view->view_model_.show(FilesScreen::Search);
+}
+
+void FilesView::configure_key_remap(bool enabled) noexcept
+{
+    if (enabled) key_remap_view_ = this;
+
+    bool captured_indev_present = !key_remap_active_;
+    for (lv_indev_t *indev = lv_indev_get_next(nullptr); indev != nullptr; indev = lv_indev_get_next(indev)) {
+        if (lv_indev_get_type(indev) == LV_INDEV_TYPE_KEYPAD) {
+            if (indev == key_remap_indev_) captured_indev_present = true;
+            lv_indev_set_key_remap_cb(indev, enabled ? remap_key : nullptr);
+        }
+    }
+
+    // A keyboard can disappear while Escape is held. Do not retain its raw
+    // pointer across a reconnect, where an allocator could reuse the address
+    // for a new device and accidentally swallow Escape on the base screen.
+    if (enabled && key_remap_active_ && !captured_indev_present) {
+        key_remap_indev_  = nullptr;
+        key_remap_active_ = false;
+    }
+
+    if (!enabled && key_remap_view_ == this) {
+        key_remap_view_   = nullptr;
+        key_remap_indev_  = nullptr;
+        key_remap_active_ = false;
+    }
+}
+
+lv_key_t FilesView::remap_key(lv_indev_t *indev, lv_key_t key)
+{
+    if (key != LV_KEY_ESC || key_remap_view_ == nullptr) return key;
+
+    // AppKit reserves a physical Esc for exiting when a non-editable button has focus.
+    // Once a menu consumes the first Esc, keep remapping that same physical key until
+    // it is released. Otherwise a held key can close the menu and then leak a repeated
+    // Esc to the runtime after the screen has returned to Home.
+    if (key_remap_active_ && key_remap_indev_ == indev) {
+        if (lv_indev_get_state(indev) == LV_INDEV_STATE_RELEASED) {
+            key_remap_active_ = false;
+            key_remap_indev_  = nullptr;
+        }
+        return LV_KEY_DEL;
+    }
+
+    if (lv_indev_get_state(indev) == LV_INDEV_STATE_PRESSED) {
+        const FilesScreen screen = key_remap_view_->view_model_.screen();
+        if (screen == FilesScreen::More || screen == FilesScreen::Actions ||
+            screen == FilesScreen::SelectionActions) {
+            key_remap_indev_  = indev;
+            key_remap_active_ = true;
+            return LV_KEY_DEL;
+        }
+    }
+
+    return key;
+}
+
+void FilesView::menu_key_pressed(lv_event_t *event)
+{
+    auto *view = static_cast<FilesView *>(lv_event_get_user_data(event));
+    if (!view) return;
+    const FilesScreen screen = view->view_model_.screen();
+    if (screen != FilesScreen::More && screen != FilesScreen::Actions &&
+        screen != FilesScreen::SelectionActions) {
+        return;
+    }
+
+    const lv_key_t key = static_cast<lv_key_t>(lv_event_get_key(event));
+    if (key != LV_KEY_ESC && key != LV_KEY_DEL) return;
+    view->view_model_.back();
+    // The model changes screens immediately. Ignore the remaining repeat samples
+    // from this physical key so one Esc cannot walk through the newly exposed page.
+    if (lv_indev_t *indev = lv_indev_active()) lv_indev_wait_release(indev);
+    lv_event_stop_processing(event);
+}
+
+void FilesView::search_field_key_pressed(lv_event_t *event)
+{
+    auto *view = view_from_event(event);
+    if (!view) return;
+
+    const std::uint32_t key = lv_event_get_key(event);
+    const bool editing_search = view->view_model_.screen() == FilesScreen::Search &&
+                                lv_event_get_target_obj(event) == view->search_input_;
+    if (key == LV_KEY_ESC && view->view_model_.screen() == FilesScreen::Search) {
+        if (view->keyboard_) {
+            lv_keyboard_set_textarea(view->keyboard_, nullptr);
+            lv_obj_add_flag(view->keyboard_, LV_OBJ_FLAG_HIDDEN);
+        }
+        view->view_model_.back();
+        lv_event_stop_processing(event);
+        if (lv_indev_t *indev = lv_indev_active()) lv_indev_stop_processing(indev);
+        return;
+    }
+    if (!editing_search && key == LV_KEY_ENTER) {
+        view->view_model_.show(FilesScreen::Search);
+        lv_event_stop_processing(event);
+        if (lv_indev_t *indev = lv_indev_active()) lv_indev_stop_processing(indev);
+        return;
+    }
+    // Direction keys are reserved for moving between file and folder rows.
+    // Tab/Shift-Tab owns focus changes between the search control and results.
+    if (key == LV_KEY_LEFT || key == LV_KEY_RIGHT || key == LV_KEY_UP || key == LV_KEY_DOWN) {
+        lv_event_stop_processing(event);
+        if (lv_indev_t *indev = lv_indev_active()) lv_indev_stop_processing(indev);
+    }
 }
 
 void FilesView::row_clicked(lv_event_t *event)
@@ -231,6 +389,101 @@ void FilesView::row_clicked(lv_event_t *event)
     view->view_model_.activate_entry(binding->index);
     view->suppress_render_ = false;
     if (selecting) view->refresh_selection();
+}
+
+void FilesView::row_key_pressed(lv_event_t *event)
+{
+    auto *binding = static_cast<RowBinding *>(lv_event_get_user_data(event));
+    if (!binding || !binding->view || !binding->view->surface_) return;
+
+    const std::uint32_t key = lv_event_get_key(event);
+    if (key == LV_KEY_ESC && binding->source == RowSource::Search &&
+        binding->view->view_model_.screen() == FilesScreen::Search) {
+        if (binding->view->keyboard_) {
+            lv_keyboard_set_textarea(binding->view->keyboard_, nullptr);
+            lv_obj_add_flag(binding->view->keyboard_, LV_OBJ_FLAG_HIDDEN);
+        }
+        binding->view->view_model_.back();
+        lv_event_stop_processing(event);
+        if (lv_indev_t *indev = lv_indev_active()) lv_indev_stop_processing(indev);
+        return;
+    }
+    const bool previous_key = key == LV_KEY_LEFT || key == LV_KEY_UP;
+    const bool next_key     = key == LV_KEY_RIGHT || key == LV_KEY_DOWN;
+    if (!previous_key && !next_key) return;
+
+    auto *current = lv_event_get_target_obj(event);
+    auto *parent  = lv_obj_get_parent(current);
+    if (!parent) return;
+
+    // Entry collections contain only file rows. Pick the nearest row in the requested
+    // direction so the same controls work for both list and icon layouts. At an edge,
+    // continue in document order so every entry remains reachable from a keyboard.
+    const std::uint32_t child_count = lv_obj_get_child_count(parent);
+    lv_area_t current_area{};
+    lv_obj_get_coords(current, &current_area);
+    const std::int32_t current_x = (current_area.x1 + current_area.x2) / 2;
+    const std::int32_t current_y = (current_area.y1 + current_area.y2) / 2;
+    lv_obj_t *best                = nullptr;
+    std::int64_t best_primary     = 0;
+    std::int64_t best_secondary   = 0;
+    const bool horizontal_key     = key == LV_KEY_LEFT || key == LV_KEY_RIGHT;
+
+    for (std::uint32_t index = 0; index < child_count; ++index) {
+        auto *candidate = lv_obj_get_child(parent, static_cast<std::int32_t>(index));
+        if (candidate == current || !lv_obj_check_type(candidate, &lv_button_class) ||
+            lv_obj_has_state(candidate, LV_STATE_DISABLED)) {
+            continue;
+        }
+        const char *name = lv_obj_get_name(candidate);
+        if (!name || std::strcmp(name, "files_entry_row") != 0) continue;
+
+        lv_area_t candidate_area{};
+        lv_obj_get_coords(candidate, &candidate_area);
+        const std::int32_t candidate_x = (candidate_area.x1 + candidate_area.x2) / 2;
+        const std::int32_t candidate_y = (candidate_area.y1 + candidate_area.y2) / 2;
+        const std::int32_t dx           = candidate_x - current_x;
+        const std::int32_t dy           = candidate_y - current_y;
+        const bool in_direction        = previous_key ? (key == LV_KEY_LEFT ? dx < 0 : dy < 0)
+                                                       : (key == LV_KEY_RIGHT ? dx > 0 : dy > 0);
+        if (!in_direction) continue;
+
+        const bool same_band = horizontal_key
+                                   ? current_area.y1 <= candidate_area.y2 && candidate_area.y1 <= current_area.y2
+                                   : current_area.x1 <= candidate_area.x2 && candidate_area.x1 <= current_area.x2;
+        if (!same_band) continue;
+        const std::int64_t primary   = horizontal_key ? std::abs(dx) : std::abs(dy);
+        const std::int64_t secondary = horizontal_key ? std::abs(dy) : std::abs(dx);
+        if (!best || primary < best_primary || (primary == best_primary && secondary < best_secondary)) {
+            best            = candidate;
+            best_primary    = primary;
+            best_secondary  = secondary;
+        }
+    }
+
+    if (!best && horizontal_key) {
+        const std::int32_t current_index = lv_obj_get_index(current);
+        const std::int32_t step          = previous_key ? -1 : 1;
+        std::int32_t index                = current_index + step;
+        while (index >= 0 && index < static_cast<std::int32_t>(child_count)) {
+            auto *candidate = lv_obj_get_child(parent, index);
+            if (candidate && lv_obj_check_type(candidate, &lv_button_class) &&
+                !lv_obj_has_state(candidate, LV_STATE_DISABLED) &&
+                lv_obj_get_name(candidate) && std::strcmp(lv_obj_get_name(candidate), "files_entry_row") == 0) {
+                best = candidate;
+                break;
+            }
+            index += step;
+        }
+    }
+
+    if (!best) return;
+    lv_group_t *group = lv_obj_get_group(current);
+    if (group) {
+        if (lv_obj_get_group(best) != group) lv_group_add_obj(group, best);
+        lv_group_focus_obj(best);
+        lv_obj_scroll_to_view_recursive(best, LV_ANIM_OFF);
+    }
 }
 
 void FilesView::row_long_pressed(lv_event_t *event)
@@ -331,17 +584,38 @@ void FilesView::query_changed(lv_event_t *event)
 void FilesView::search_input_activated(lv_event_t *event)
 {
     auto *view = view_from_event(event);
-    if (!view || !view->keyboard_) return;
+    auto *input = lv_event_get_target_obj(event);
+    if (!view || !input) return;
+    if (auto *field = lv_obj_get_parent(input); field && lv_obj_get_name(field) &&
+        std::strcmp(lv_obj_get_name(field), "files_search_field") == 0) {
+        lv_obj_add_state(field, LV_STATE_FOCUSED);
+    }
+    if (!view->keyboard_) return;
     lv_obj_clear_flag(view->keyboard_, LV_OBJ_FLAG_HIDDEN);
-    lv_keyboard_set_textarea(view->keyboard_, lv_event_get_target_obj(event));
+    lv_keyboard_set_textarea(view->keyboard_, input);
+}
+
+void FilesView::search_input_deactivated(lv_event_t *event)
+{
+    auto *input = lv_event_get_target_obj(event);
+    if (input) {
+        if (auto *field = lv_obj_get_parent(input); field && lv_obj_get_name(field) &&
+            std::strcmp(lv_obj_get_name(field), "files_search_field") == 0) {
+            lv_obj_remove_state(field, LV_STATE_FOCUSED);
+        }
+    }
 }
 
 void FilesView::keyboard_done(lv_event_t *event)
 {
     auto *view = view_from_event(event);
     if (!view || !view->keyboard_) return;
+    const lv_event_code_t code = lv_event_get_code(event);
     lv_keyboard_set_textarea(view->keyboard_, nullptr);
     lv_obj_add_flag(view->keyboard_, LV_OBJ_FLAG_HIDDEN);
+    if (code == LV_EVENT_CANCEL && view->view_model_.screen() == FilesScreen::Search) {
+        view->view_model_.back();
+    }
 }
 
 void FilesView::select_mode_clicked(lv_event_t *event)
@@ -506,14 +780,23 @@ std::string FilesView::content_key() const
 void FilesView::render()
 {
     if (!frame_) return;
+    // AppKit may reconnect a hardware keypad after the view was created.
+    // Reapply the remap whenever a screen is rebuilt so a newly attached
+    // device gets the same modal Escape behavior.
+    if (visible_) configure_key_remap(true);
     // The same directory content returns where it was scrolled to, for example when a menu or selection
-    // mode opens over it, or after a page such as Move or a preview closes.
+    // mode opens over it, or after a page such as Move or a preview closes. Leaving selection mode starts
+    // the directory at the top so the search field remains fully visible.
     const std::string key = content_key();
+    const FilesScreen screen = view_model_.screen();
+    const bool leaving_selection =
+        (rendered_screen_ == FilesScreen::Select || rendered_screen_ == FilesScreen::SelectionActions) &&
+        (screen == FilesScreen::Home || screen == FilesScreen::Folder);
     if (scroller_ && !render_key_.empty()) {
         scroll_key_ = render_key_;
         scroll_y_   = lv_obj_get_scroll_y(scroller_);
     }
-    const std::int32_t previous_scroll = !key.empty() && key == scroll_key_ ? scroll_y_ : 0;
+    const std::int32_t previous_scroll = !leaving_selection && !key.empty() && key == scroll_key_ ? scroll_y_ : 0;
     if (page_) lv_obj_delete(page_);
     clear_page_references();
     render_key_ = key;
@@ -574,6 +857,10 @@ void FilesView::render()
         lv_obj_update_layout(surface_);
         place_action_menu(true);
     }
+    if (visible_ && overlay_ && view_model_.screen() != FilesScreen::Info && view_model_.screen() != FilesScreen::Move) {
+        focus_overlay_control();
+    }
+    rendered_screen_ = screen;
 }
 
 void FilesView::clear_page_references() noexcept
@@ -903,6 +1190,7 @@ lv_obj_t *FilesView::create_circle_button(lv_obj_t *parent, const char *symbol, 
     auto *icon = create_label(button, symbol, 22, components::color_container_title);
     lv_obj_center(icon);
     lv_obj_add_event_cb(button, callback, LV_EVENT_CLICKED, this);
+    if (lv_group_t *group = lv_group_get_default()) lv_group_add_obj(group, button);
     return button;
 }
 
@@ -919,7 +1207,15 @@ lv_obj_t *FilesView::create_search_field(lv_obj_t *parent, const char *text, boo
     auto *field = components::create_card(parent, LV_RADIUS_CIRCLE);
     lv_obj_set_name_static(field, "files_search_field");
     lv_obj_set_size(field, LV_PCT(100), kSearchFieldHeight);
-    lv_obj_set_style_border_width(field, 0, 0);
+    // Reserve the focus frame inside the search card at all times so focus
+    // does not change the row geometry while the result list is rebuilt.
+    lv_obj_set_style_border_width(field, 3, 0);
+    lv_obj_set_style_border_opa(field, LV_OPA_TRANSP, 0);
+    // Keep the focus frame inside the search card so it remains visible next
+    // to the display edge and while the keyboard is open.
+    lv_obj_set_style_border_width(field, 3, LV_STATE_FOCUSED);
+    lv_obj_set_style_border_color(field, lv_color_hex(components::color_navigation_accent), LV_STATE_FOCUSED);
+    lv_obj_set_style_border_opa(field, LV_OPA_COVER, LV_STATE_FOCUSED);
     lv_obj_set_style_pad_hor(field, 18, 0);
     lv_obj_set_style_pad_ver(field, 0, 0);
     lv_obj_set_style_pad_column(field, 12, 0);
@@ -950,7 +1246,9 @@ lv_obj_t *FilesView::create_search_field(lv_obj_t *parent, const char *text, boo
         lv_obj_set_style_border_width(textarea, 2, LV_PART_CURSOR);
         lv_obj_set_style_border_color(textarea, lv_color_hex(components::color_navigation_accent), LV_PART_CURSOR);
         lv_obj_add_event_cb(textarea, query_changed, LV_EVENT_VALUE_CHANGED, this);
+        lv_obj_add_event_cb(textarea, search_field_key_pressed, LV_EVENT_KEY, this);
         lv_obj_add_event_cb(textarea, search_input_activated, LV_EVENT_FOCUSED, this);
+        lv_obj_add_event_cb(textarea, search_input_deactivated, LV_EVENT_DEFOCUSED, this);
         lv_obj_add_event_cb(textarea, search_input_activated, LV_EVENT_CLICKED, this);
         search_input_ = textarea;
     } else {
@@ -962,6 +1260,14 @@ lv_obj_t *FilesView::create_search_field(lv_obj_t *parent, const char *text, boo
         lv_obj_add_flag(field, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_style_bg_color(field, lv_color_hex(components::color_secondary_control), LV_STATE_PRESSED);
         lv_obj_add_event_cb(field, search_clicked, LV_EVENT_CLICKED, this);
+        // Focus only moves onto the search entry during keyboard navigation.
+        // Enter is handled by search_field_key_pressed and activates Search.
+        lv_obj_add_event_cb(field, search_field_key_pressed, LV_EVENT_KEY, this);
+        if (!view_model_.selecting()) {
+            if (lv_group_t *group = lv_group_get_default()) {
+                lv_group_add_obj(group, field);
+            }
+        }
     }
     return field;
 }
@@ -1005,6 +1311,7 @@ lv_obj_t *FilesView::create_entry_item(lv_obj_t *parent, const FilesEntryPresent
         binding       = {this, index, source};
         lv_obj_set_user_data(item, &binding);
         lv_obj_add_event_cb(item, row_clicked, LV_EVENT_CLICKED, &binding);
+        lv_obj_add_event_cb(item, row_key_pressed, LV_EVENT_KEY, &binding);
         // A long press on an item of the open folder shows its context menu.
         if (source == RowSource::Directory) {
             lv_obj_add_event_cb(item, row_long_pressed, LV_EVENT_LONG_PRESSED, &binding);
@@ -1025,9 +1332,14 @@ lv_obj_t *FilesView::create_grid_cell(lv_obj_t *parent, const FilesEntryPresenta
     lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, LV_STATE_CHECKED);
     lv_obj_set_style_bg_color(cell, lv_color_hex(components::color_secondary_control), LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(cell, 3, 0);
+    lv_obj_set_style_border_opa(cell, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_color(cell, lv_color_hex(components::color_navigation_accent), LV_STATE_FOCUSED);
+    lv_obj_set_style_border_opa(cell, LV_OPA_COVER, LV_STATE_FOCUSED);
     lv_obj_set_style_pad_hor(cell, 4, 0);
     lv_obj_set_style_pad_ver(cell, 8, 0);
     lv_obj_set_style_pad_row(cell, 2, 0);
+    lv_obj_add_flag(cell, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
     lv_obj_set_flex_flow(cell, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(cell, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
@@ -1076,7 +1388,12 @@ lv_obj_t *FilesView::create_list_row(lv_obj_t *parent, const FilesEntryPresentat
     lv_obj_set_style_bg_opa(row, LV_OPA_COVER, LV_STATE_CHECKED);
     lv_obj_set_style_bg_color(row, lv_color_hex(components::color_secondary_control), LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(row, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(row, 3, 0);
+    lv_obj_set_style_border_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_color(row, lv_color_hex(components::color_navigation_accent), LV_STATE_FOCUSED);
+    lv_obj_set_style_border_opa(row, LV_OPA_COVER, LV_STATE_FOCUSED);
     lv_obj_set_style_pad_column(row, 12, 0);
+    lv_obj_add_flag(row, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
@@ -1274,6 +1591,7 @@ lv_obj_t *FilesView::create_menu_item(lv_obj_t *menu, const char *text, const ch
         lv_obj_set_name_static(caption, "files_menu_subtitle");
     }
     lv_obj_add_event_cb(item, callback, LV_EVENT_CLICKED, user_data);
+    lv_obj_add_event_cb(item, menu_key_pressed, LV_EVENT_KEY, this);
     return item;
 }
 
@@ -1305,6 +1623,7 @@ lv_obj_t *FilesView::create_action_item(lv_obj_t *menu, const char *text, const 
     lv_obj_set_flex_grow(title, 1);
     limit_lines(title, 22, 2);
     lv_obj_add_event_cb(item, action_clicked, LV_EVENT_CLICKED, bind_menu(action));
+    lv_obj_add_event_cb(item, menu_key_pressed, LV_EVENT_KEY, this);
     return item;
 }
 
@@ -1326,6 +1645,7 @@ lv_obj_t *FilesView::create_action_tile(lv_obj_t *row, const char *text, const c
     create_label(tile, symbol, 22, components::color_container_title);
     create_label(tile, text, 14, components::color_container_title);
     lv_obj_add_event_cb(tile, action_clicked, LV_EVENT_CLICKED, bind_menu(action));
+    lv_obj_add_event_cb(tile, menu_key_pressed, LV_EVENT_KEY, this);
     return tile;
 }
 
@@ -1373,7 +1693,20 @@ lv_obj_t *FilesView::create_keyboard(lv_obj_t *parent, const char *name, lv_obj_
     lv_keyboard_set_textarea(keyboard, textarea);
     lv_obj_add_event_cb(keyboard, keyboard_done, LV_EVENT_READY, this);
     lv_obj_add_event_cb(keyboard, keyboard_done, LV_EVENT_CANCEL, this);
+    // The on-screen keyboard is an input surface, not a hardware focus target.
+    // Keep it out of the default group so Tab moves from the editor to the
+    // page controls or file rows.
+    if (lv_obj_get_group(keyboard)) lv_group_remove_obj(keyboard);
     lv_obj_add_state(textarea, LV_STATE_FOCUSED);
+    // Hardware keyboards use AppKit's default LVGL group. Explicitly place the
+    // editor in that group so opening Search or a name dialog immediately accepts
+    // character keys without requiring a pointer click first.
+    if (textarea) {
+        if (lv_group_t *group = lv_group_get_default()) {
+            if (lv_obj_get_group(textarea) != group) lv_group_add_obj(group, textarea);
+            lv_group_focus_obj(textarea);
+        }
+    }
     return keyboard;
 }
 
@@ -1435,7 +1768,25 @@ void FilesView::create_directory_content(lv_obj_t *scroll)
     if (view_model_.selecting()) {
         // Searching is unavailable while selecting; the field stays so the content does not shift.
         lv_obj_clear_flag(search, LV_OBJ_FLAG_CLICKABLE);
+        lv_group_remove_obj(search);
     }
+
+    // Keep the navigation button after the directory entries in the keyboard
+    // order. This makes Tab reach More after the last item even though the
+    // button is rendered in the fixed navigation bar above the content.
+    lv_group_t *group = lv_group_get_default();
+    lv_obj_t *more     = lv_obj_find_by_name(chrome_, "files_more_button");
+    if (group && lv_obj_get_group(search) == group) lv_group_remove_obj(search);
+    if (group && more) lv_group_remove_obj(more);
+    const auto append_more = [&]() {
+        if (group && more && lv_obj_get_group(more) != group) lv_group_add_obj(group, more);
+    };
+    const auto append_search = [&]() {
+        if (group && search && lv_obj_has_flag(search, LV_OBJ_FLAG_CLICKABLE) &&
+            lv_obj_get_group(search) != group) {
+            lv_group_add_obj(group, search);
+        }
+    };
 
     if (!view_model_.error_text().empty() && !reports_own_error(view_model_.screen())) {
         auto *error = create_label(scroll, view_model_.error_text().c_str(), 14, components::color_destructive);
@@ -1444,6 +1795,8 @@ void FilesView::create_directory_content(lv_obj_t *scroll)
         lv_obj_set_style_pad_top(error, 24, 0);
         lv_obj_set_style_text_align(error, LV_TEXT_ALIGN_CENTER, 0);
         lv_label_set_long_mode(error, LV_LABEL_LONG_WRAP);
+        append_more();
+        append_search();
         return;
     }
 
@@ -1454,16 +1807,103 @@ void FilesView::create_directory_content(lv_obj_t *scroll)
         lv_obj_set_width(empty, LV_PCT(100));
         lv_obj_set_style_pad_top(empty, 48, 0);
         lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
+        append_more();
+        append_search();
         return;
     }
 
     entry_grid_ = create_entry_collection(scroll, false);
+    if (group) {
+        const std::uint32_t count = lv_obj_get_child_count(entry_grid_);
+        for (std::uint32_t index = 0; index < count; ++index) {
+            auto *entry = lv_obj_get_child(entry_grid_, static_cast<std::int32_t>(index));
+            if (entry && lv_obj_check_type(entry, &lv_button_class) && lv_obj_get_group(entry) != group) {
+                lv_group_add_obj(group, entry);
+            }
+        }
+    }
+    append_more();
+    append_search();
+    // A hidden Files page may still finish an async render while Help is
+    // visible. Do not move the shared keyboard focus into that hidden page.
+    if (visible_) focus_first_entry();
     char count[48]{};
     std::snprintf(count, sizeof(count), "%zu %s", entry_count, entry_count == 1U ? "item" : "items");
     auto *count_label = create_label(scroll, count, 14, components::color_muted_text);
     lv_obj_set_name_static(count_label, "files_entry_count");
     lv_obj_set_width(count_label, LV_PCT(100));
     lv_obj_set_style_text_align(count_label, LV_TEXT_ALIGN_CENTER, 0);
+}
+
+void FilesView::focus_first_entry() noexcept
+{
+    if (!entry_grid_ || (view_model_.screen() != FilesScreen::Home && view_model_.screen() != FilesScreen::Folder &&
+                         view_model_.screen() != FilesScreen::Select)) {
+        return;
+    }
+    const std::uint32_t count = lv_obj_get_child_count(entry_grid_);
+    if (count == 0U) return;
+    auto *first = lv_obj_get_child(entry_grid_, 0);
+    if (!first || !lv_obj_check_type(first, &lv_button_class)) return;
+
+    lv_group_t *group = lv_group_get_default();
+    if (!group) group = lv_obj_get_group(first);
+    if (!group) return;
+    if (lv_obj_get_group(first) != group) lv_group_add_obj(group, first);
+    lv_group_focus_obj(first);
+    lv_obj_scroll_to_view_recursive(first, LV_ANIM_OFF);
+}
+
+void FilesView::focus_overlay_control() noexcept
+{
+    lv_group_t *group = lv_group_get_default();
+    if (!group || !overlay_) return;
+
+    // A modal menu sits above a still-rendered directory page. Remove the
+    // underlay controls from the keyboard group and disable them for the
+    // lifetime of this page so Tab/Enter cannot activate hidden background
+    // items. The page is rebuilt when the modal closes, restoring their state.
+    lv_group_remove_all_objs(group);
+    auto in_tree = [](lv_obj_t *object, lv_obj_t *root) {
+        for (lv_obj_t *current = object; current; current = lv_obj_get_parent(current)) {
+            if (current == root) return true;
+        }
+        return false;
+    };
+    auto disable_underlay = [&](auto &&self, lv_obj_t *object) -> void {
+        if (!object || in_tree(object, overlay_) || in_tree(object, keyboard_)) return;
+        if (lv_obj_is_group_def(object) || lv_obj_is_editable(object)) lv_obj_add_state(object, LV_STATE_DISABLED);
+        const std::uint32_t count = lv_obj_get_child_count(object);
+        for (std::uint32_t index = 0; index < count; ++index) {
+            self(self, lv_obj_get_child(object, static_cast<std::int32_t>(index)));
+        }
+    };
+    disable_underlay(disable_underlay, page_);
+
+    lv_obj_t *first = nullptr;
+    auto in_keyboard = [this](lv_obj_t *object) {
+        for (lv_obj_t *current = object; current; current = lv_obj_get_parent(current)) {
+            if (current == keyboard_) return true;
+        }
+        return false;
+    };
+    auto collect = [&](auto &&self, lv_obj_t *object) -> void {
+        if (!object || lv_obj_has_flag(object, LV_OBJ_FLAG_HIDDEN) || in_keyboard(object)) return;
+        if ((lv_obj_is_group_def(object) || lv_obj_is_editable(object)) &&
+            !lv_obj_has_state(object, LV_STATE_DISABLED)) {
+            if (lv_obj_get_group(object) != group) lv_group_add_obj(group, object);
+            if (!first) first = object;
+        }
+        const std::uint32_t count = lv_obj_get_child_count(object);
+        for (std::uint32_t index = 0; index < count; ++index) {
+            self(self, lv_obj_get_child(object, static_cast<std::int32_t>(index)));
+        }
+    };
+    collect(collect, overlay_);
+    if (first) {
+        lv_group_focus_obj(first);
+        lv_obj_scroll_to_view_recursive(first, LV_ANIM_OFF);
+    }
 }
 
 void FilesView::create_underlay()
@@ -1657,6 +2097,7 @@ void FilesView::build_more()
     if (view_model_.has_clipboard()) {
         create_menu_item(menu, "Paste", nullptr, kPasteSymbol, false, "files_menu_paste", paste_clicked, this);
     }
+    create_menu_item(menu, "Help", nullptr, kInfoSymbol, false, "files_help_button", help_clicked, this);
     create_menu_divider(menu);
 
     const FilesViewMode mode = view_model_.view_mode();
@@ -1931,6 +2372,7 @@ void FilesView::build_name_dialog()
     lv_obj_set_style_pad_hor(input, 16, 0);
     lv_obj_add_event_cb(input, name_changed, LV_EVENT_VALUE_CHANGED, this);
     lv_obj_add_event_cb(input, search_input_activated, LV_EVENT_FOCUSED, this);
+    lv_obj_add_event_cb(input, search_input_deactivated, LV_EVENT_DEFOCUSED, this);
     lv_obj_add_event_cb(input, search_input_activated, LV_EVENT_CLICKED, this);
     name_input_ = input;
 
@@ -1985,6 +2427,12 @@ void FilesView::build_delete()
 void FilesView::refresh_search_results()
 {
     if (!search_count_ || !search_results_) return;
+    // Rebuilding the result rows can cause LVGL to move the default group's
+    // focus to the first newly-created row. Preserve focus in the editable
+    // search field so each hardware-key character continues to be entered
+    // into the textarea after the query changes.
+    lv_group_t *input_group = search_input_ ? lv_obj_get_group(search_input_) : nullptr;
+    const bool restore_input_focus = input_group && lv_group_get_focused(input_group) == search_input_;
     char count[48]{};
     const std::size_t result_count = view_model_.search_count();
     std::snprintf(count, sizeof(count), "%zu %s", result_count, result_count == 1U ? "result" : "results");
@@ -1998,11 +2446,21 @@ void FilesView::refresh_search_results()
         lv_obj_set_width(empty, LV_PCT(100));
         lv_obj_set_style_pad_top(empty, 32, 0);
         lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
+        if (restore_input_focus && input_group && lv_obj_is_valid(search_input_)) {
+            lv_group_focus_obj(search_input_);
+        }
         return;
     }
 
+    lv_group_t *group = search_input_ ? lv_obj_get_group(search_input_) : nullptr;
     for (std::size_t index = 0; index < result_count; ++index) {
         const auto *entry = view_model_.search_entry(index);
-        if (entry) create_entry_item(search_results_, *entry, index, RowSource::Search);
+        if (!entry) continue;
+        auto *row = create_entry_item(search_results_, *entry, index, RowSource::Search);
+        if (group && row && lv_obj_get_group(row) != group) lv_group_add_obj(group, row);
+    }
+
+    if (restore_input_focus && input_group && lv_obj_is_valid(search_input_)) {
+        lv_group_focus_obj(search_input_);
     }
 }

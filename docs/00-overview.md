@@ -18,6 +18,7 @@
 - 在当前目录中按名称搜索文件和文件夹；
 - 只读预览受支持的文本文件；
 - 在当前目录中新建文件夹；
+- 从“更多”菜单打开可滚动的 Help 页面，查看文件和文件夹操作说明；
 - 长按文件或文件夹弹出上下文菜单，对该项目执行拷贝、移动、显示简介、重新命名、
   压缩、复制（创建副本）、用 1 个项目新建文件夹和删除；
 - 在更多操作菜单中把已拷贝的一个或多个项目粘贴到当前目录。
@@ -102,7 +103,8 @@ FilesView -> FilesViewModel -> FilesModel
   类型标签）、预览信息等展示对象，通过 LVGL Subject 发布状态，并暴露用户命令。
 - `FilesView` 只创建和布局 LVGL 对象、绑定状态、转发事件，不直接访问文件系统，
   也不直接修改 Model。
-- `app.cpp` 管理 AppKit 生命周期以及 Model、ViewModel、View 的创建和销毁顺序。
+- `HelpView` 是不依赖 Model 的静态 LVGL 页面，只负责展示操作说明并通过回调返回 Files 页面。
+- `app.cpp` 管理 AppKit 生命周期以及 Model、ViewModel、FilesView、HelpView 的创建和销毁顺序。
 
 数据流保持单向：
 
@@ -129,6 +131,9 @@ src/
 │   ├── files_view_model.cpp/.hpp    # 展示状态、Subject 和命令
 │   ├── files_view.cpp/.hpp          # LVGL 页面、布局和事件转发
 │   └── files_icons.cpp/.hpp         # 文件夹和文档图标的绘制
+├── pages/help/
+│   ├── help_view.cpp/.hpp            # 静态、可滚动的操作帮助页
+│   └── help_content.hpp              # 帮助页文案分组
 └── components/                      # 共享样式、组件和 Subject 生命周期辅助
 ```
 

@@ -44,11 +44,40 @@ struct PointerState {
 };
 PointerState pointer;
 
+// A keypad driven by the test. Keeping the state in a read callback exercises
+// LVGL's real pressed/released processing, including the short and long Enter
+// paths, rather than sending synthetic object events.
+struct KeypadState {
+    std::uint32_t key       = LV_KEY_ENTER;
+    lv_indev_state_t state  = LV_INDEV_STATE_RELEASED;
+};
+KeypadState keypad;
+bool runtime_escape_requested = false;
+
 void read_pointer(lv_indev_t *indev, lv_indev_data_t *data)
 {
     (void)indev;
     data->point = pointer.point;
     data->state = pointer.pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+}
+
+void read_keypad(lv_indev_t *indev, lv_indev_data_t *data)
+{
+    (void)indev;
+    data->key   = keypad.key;
+    data->state = keypad.state;
+}
+
+// AppKit handles hardware Esc from the indev callback before LVGL forwards it
+// to the focused object. This guard mirrors that exit condition so the test
+// also proves the application's remap runs before the runtime callback.
+void runtime_escape_guard(lv_event_t *event)
+{
+    auto *indev = static_cast<lv_indev_t *>(lv_event_get_target(event));
+    if (indev && lv_indev_get_state(indev) == LV_INDEV_STATE_PRESSED &&
+        lv_indev_get_key(indev) == LV_KEY_ESC) {
+        runtime_escape_requested = true;
+    }
 }
 
 void flush_display(lv_display_t *display, const lv_area_t *area, std::uint8_t *pixels)
@@ -78,6 +107,42 @@ void settle(lv_obj_t *root)
         lv_timer_handler();
     }
     lv_obj_update_layout(root);
+}
+
+void keypad_tick(lv_obj_t *root, std::uint32_t milliseconds)
+{
+    for (std::uint32_t elapsed = 0; elapsed < milliseconds; elapsed += 10U) {
+        lv_tick_inc(10);
+        lv_timer_handler();
+    }
+    settle(root);
+}
+
+void keypad_press(lv_obj_t *root, std::uint32_t key)
+{
+    keypad.key   = key;
+    keypad.state = LV_INDEV_STATE_PRESSED;
+    keypad_tick(root, 40);
+}
+
+void keypad_release(lv_obj_t *root, std::uint32_t key)
+{
+    keypad.key   = key;
+    keypad.state = LV_INDEV_STATE_RELEASED;
+    keypad_tick(root, 40);
+}
+
+void keypad_tap(lv_obj_t *root, std::uint32_t key)
+{
+    keypad_press(root, key);
+    keypad_release(root, key);
+}
+
+void keypad_hold(lv_obj_t *root, std::uint32_t key, std::uint32_t milliseconds)
+{
+    keypad_press(root, key);
+    keypad_tick(root, milliseconds);
+    keypad_release(root, key);
 }
 
 lv_obj_t *require_named(lv_obj_t *root, const char *name)
@@ -156,6 +221,16 @@ void assert_inside(lv_obj_t *object, lv_obj_t *container)
     assert(object_area.y1 >= container_area.y1);
     assert(object_area.x2 <= container_area.x2);
     assert(object_area.y2 <= container_area.y2);
+}
+
+void assert_focused_border(lv_obj_t *object)
+{
+    assert(object != nullptr);
+    assert(lv_obj_has_state(object, LV_STATE_FOCUSED));
+    assert(lv_obj_get_style_border_width(object, LV_PART_MAIN) > 0);
+    assert(lv_obj_get_style_border_opa(object, LV_PART_MAIN) != LV_OPA_TRANSP);
+    assert(lv_color_eq(lv_obj_get_style_border_color(object, LV_PART_MAIN),
+                       lv_color_hex(components::color_navigation_accent)));
 }
 
 void click(lv_obj_t *root, lv_obj_t *object)
@@ -550,6 +625,7 @@ void assert_more(lv_obj_t *root, const char *view_item = "files_view_icons", con
     // something has been copied.
     std::vector<const char *> items = {"files_menu_select", "files_new_folder_button"};
     if (expect_paste) items.push_back("files_menu_paste");
+    items.push_back("files_help_button");
     for (const char *name : {"files_view_icons", "files_view_list", "files_sort_name", "files_sort_kind",
                              "files_sort_date", "files_sort_size"}) {
         items.push_back(name);
@@ -570,6 +646,31 @@ void assert_more(lv_obj_t *root, const char *view_item = "files_view_icons", con
     auto *subtitle = require_named(menu, "files_menu_subtitle");
     assert(lv_obj_get_parent(lv_obj_get_parent(subtitle)) == require_named(menu, sort_item));
     assert(std::string_view(lv_label_get_text(subtitle)) == direction);
+}
+
+void assert_help(lv_obj_t *root)
+{
+    auto *surface = require_named(root, "help_surface");
+    auto *navbar  = require_named(root, "help_navbar");
+    auto *back    = require_named(root, "help_back_button");
+    auto *title   = require_named(root, "help_nav_title");
+    auto *scroller = require_named(root, "help_scroller");
+    auto *content  = require_named(root, "help_content");
+    assert(!lv_obj_has_flag(surface, LV_OBJ_FLAG_HIDDEN));
+    assert(lv_obj_has_flag(require_named(root, "files_surface"), LV_OBJ_FLAG_HIDDEN));
+    assert(std::string_view(lv_label_get_text(title)) == "Help");
+    assert(lv_obj_get_parent(back) == navbar);
+    assert(lv_obj_get_width(content) <= 860);
+    assert(lv_obj_get_height(scroller) > 0);
+    assert(lv_obj_get_child_count(content) >= 5);
+    // The content intentionally extends below the viewport; only its horizontal
+    // bounds need to stay within the scroll container.
+    lv_area_t content_area{};
+    lv_area_t scroller_area{};
+    lv_obj_get_coords(content, &content_area);
+    lv_obj_get_coords(scroller, &scroller_area);
+    assert(content_area.x1 >= scroller_area.x1 && content_area.x2 <= scroller_area.x2);
+    assert_inside(back, navbar);
 }
 
 void assert_actions(lv_obj_t *root, std::string_view entry_name)
@@ -1202,9 +1303,9 @@ void exercise_menu_and_selection(lv_display_t *display, lv_obj_t *root, int widt
     click(root, "files_select_done");
     assert_home(root);
     assert(lv_obj_find_by_name(root, "files_select_indicator") == nullptr);
-    assert(lv_obj_get_scroll_y(require_named(root, "files_scroller")) == scroll_before);
-    lv_obj_scroll_to_y(require_named(root, "files_scroller"), 0, LV_ANIM_OFF);
-    settle(root);
+    auto *home_scroller = require_named(root, "files_scroller");
+    assert(lv_obj_get_scroll_y(home_scroller) == 0);
+    assert_inside(require_named(root, "files_search_field"), home_scroller);
 }
 
 void exercise_item_actions(lv_display_t *display, lv_obj_t *root, const TemporaryDirectory &fixture, int width,
@@ -1541,9 +1642,33 @@ void exercise_all_reachable_pages(lv_display_t *display, lv_obj_t *root, const T
     click(root, "files_back_button");
     assert_home(root);
 
-    click(root, "files_more_button");
+    auto *files_scroller = require_named(root, "files_scroller");
+    lv_obj_scroll_to_y(files_scroller, 80, LV_ANIM_OFF);
+    settle(root);
+    const std::int32_t help_return_scroll = lv_obj_get_scroll_y(files_scroller);
+    touch(root, require_named(root, "files_more_button"), 100);
     assert_more(root);
     assert(render_has_contrast(display, width, height));
+    touch(root, require_named(root, "files_help_button"), 100);
+    assert_help(root);
+    assert(render_has_contrast(display, width, height));
+    auto *help_scroller = require_named(root, "help_scroller");
+    assert(lv_obj_get_scroll_y(help_scroller) == 0);
+    if (lv_obj_get_scroll_bottom(help_scroller) > 0) {
+        lv_obj_scroll_to_y(help_scroller, 200, LV_ANIM_OFF);
+        settle(root);
+        assert(lv_obj_get_scroll_y(help_scroller) > 0);
+    }
+    click(root, "help_back_button");
+    assert_home(root);
+    assert(lv_obj_get_scroll_y(require_named(root, "files_scroller")) == help_return_scroll);
+    touch(root, require_named(root, "files_more_button"), 100);
+    touch(root, require_named(root, "files_help_button"), 100);
+    assert_help(root);
+    assert(lv_obj_get_scroll_y(require_named(root, "help_scroller")) == 0);
+    click(root, "help_back_button");
+    assert_home(root);
+    click(root, "files_more_button");
     click(root, "files_new_folder_button");
     assert_new_folder(root);
     assert(render_has_contrast(display, width, height));
@@ -1628,6 +1753,12 @@ void route_to_snapshot(lv_obj_t *root, std::string_view scenario)
     if (scenario == "more") {
         click(root, "files_more_button");
         assert_more(root);
+        return;
+    }
+    if (scenario == "help") {
+        click(root, "files_more_button");
+        click(root, "files_help_button");
+        assert_help(root);
         return;
     }
     if (scenario == "new-folder") {
@@ -1735,6 +1866,344 @@ void populate_fixture(const TemporaryDirectory &fixture)
             "report-" + (index < 10 ? std::string("0") : std::string()) + std::to_string(index) + ".txt";
         fixture.write_file(name, "render fixture\n");
     }
+}
+
+void open_app(const cm0_app_descriptor_t *descriptor, cm0_app_context_t &context, std::string_view root_path);
+void close_app(const cm0_app_descriptor_t *descriptor, cm0_app_context_t &context);
+
+void exercise_keyboard(const cm0_app_descriptor_t *descriptor, cm0_app_context_t &context, lv_display_t *display,
+                       lv_group_t *group, const TemporaryDirectory &fixture, int width, int height,
+                       const char *output_path)
+{
+    const bool portrait = height > width;
+    open_app(descriptor, context, fixture.root().string());
+    auto *root = context.root;
+    assert_home(root);
+
+    // Navigation controls are part of the hardware keyboard focus order and
+    // expose the same visible focus treatment as entry rows.
+    auto *more_button = require_named(root, "files_more_button");
+    lv_group_focus_obj(more_button);
+    settle(root);
+    assert_focused_border(more_button);
+
+    // ESC dismisses the pull-down menu while leaving the Files app open.
+    click(root, "files_more_button");
+    assert_more(root);
+    runtime_escape_requested = false;
+    keypad_tap(root, LV_KEY_ESC);
+    assert(!runtime_escape_requested);
+    assert_home(root);
+    more_button = require_named(root, "files_more_button");
+    lv_group_focus_obj(more_button);
+    settle(root);
+    assert_focused_border(more_button);
+
+    // Help starts on its close button. Vertical arrows move focus through the
+    // guidance cards and pan the viewport when focus reaches an edge.
+    lv_group_focus_obj(more_button);
+    keypad_tap(root, LV_KEY_ENTER);
+    assert_more(root);
+    auto *help_menu_button = require_named(root, "files_help_button");
+    lv_group_focus_obj(help_menu_button);
+    keypad_tap(root, LV_KEY_ENTER);
+    assert_help(root);
+    auto *help_back = require_named(root, "help_back_button");
+    auto *help_scroller = require_named(root, "help_scroller");
+    auto *help_content = require_named(root, "help_content");
+    assert(lv_obj_get_scroll_y(help_scroller) == 0);
+    lv_group_focus_obj(help_back);
+    assert(lv_group_get_focused(group) == help_back);
+    const std::int32_t help_scroll_bottom = lv_obj_get_scroll_bottom(help_scroller);
+    const std::uint32_t help_target_count = lv_obj_get_child_count(help_content);
+    assert(help_target_count >= 5);
+    // Arrow keys move focus through the close button and help cards. Once the
+    // last card is focused, another arrow still pans the viewport at the edge.
+    for (std::uint32_t index = 0; index < help_target_count; ++index) {
+        keypad_tap(root, LV_KEY_DOWN);
+        assert(lv_group_get_focused(group) ==
+               (index == 0 ? lv_obj_get_child(help_content, 0)
+                           : lv_obj_get_child(help_content, static_cast<std::int32_t>(index))));
+    }
+    if (help_scroll_bottom > 0) {
+        keypad_tap(root, LV_KEY_DOWN);
+        assert(lv_obj_get_scroll_y(help_scroller) > 0);
+        keypad_tap(root, LV_KEY_HOME);
+        assert(lv_obj_get_scroll_y(help_scroller) == 0);
+        assert(lv_group_get_focused(group) == lv_obj_get_child(help_content, 0));
+    }
+
+    // Tab traverses the close button and each help card. Every focused card
+    // carries the scroll-on-focus flag, so the long page follows the focus.
+    lv_group_focus_obj(help_back);
+    for (std::uint32_t index = 0; index < help_target_count; ++index) {
+        keypad_tap(root, LV_KEY_NEXT);
+        assert(lv_group_get_focused(group) == lv_obj_get_child(help_content, static_cast<std::int32_t>(index)));
+    }
+    if (help_scroll_bottom > 0) assert(lv_obj_get_scroll_y(help_scroller) > 0);
+    keypad_tap(root, LV_KEY_PREV);
+    assert(lv_group_get_focused(group) == lv_obj_get_child(help_content, static_cast<std::int32_t>(help_target_count - 2)));
+    runtime_escape_requested = false;
+    keypad_tap(root, LV_KEY_ESC);
+    assert(!runtime_escape_requested);
+    assert_home(root);
+    more_button = require_named(root, "files_more_button");
+
+    const std::string long_folder_name(180, 'd');
+    auto *long_name = find_truncated_entry_row(root, long_folder_name, "ddd");
+    auto *documents = find_entry_row(root, "Documents");
+    auto *projects  = find_entry_row(root, "Projects");
+    auto *last_entry = lv_obj_get_child(require_named(root, "files_entry_list"), -1);
+    assert(last_entry != nullptr);
+    keypad_tap(root, LV_KEY_LEFT);
+    assert(lv_group_get_focused(group) == more_button);
+    assert_focused_border(more_button);
+    lv_group_focus_obj(last_entry);
+    // Arrow keys stay within the directory entry collection. Tab is the
+    // control-navigation key that reaches the fixed More button.
+    keypad_tap(root, LV_KEY_DOWN);
+    assert(lv_group_get_focused(group) == last_entry);
+    keypad_tap(root, LV_KEY_NEXT);
+    assert(lv_group_get_focused(group) == more_button);
+    assert_focused_border(more_button);
+    auto *entries = require_named(root, "files_entry_list");
+    std::int32_t first_row_y = INT32_MAX;
+    std::int32_t rightmost_x  = INT32_MIN;
+    lv_obj_t *top_right       = nullptr;
+    const std::uint32_t entry_count = lv_obj_get_child_count(entries);
+    for (std::uint32_t index = 0; index < entry_count; ++index) {
+        auto *entry = lv_obj_get_child(entries, static_cast<std::int32_t>(index));
+        if (!entry) continue;
+        lv_area_t area{};
+        lv_obj_get_coords(entry, &area);
+        first_row_y = std::min(first_row_y, area.y1);
+    }
+    for (std::uint32_t index = 0; index < entry_count; ++index) {
+        auto *entry = lv_obj_get_child(entries, static_cast<std::int32_t>(index));
+        if (!entry) continue;
+        lv_area_t area{};
+        lv_obj_get_coords(entry, &area);
+        if (area.y1 == first_row_y && area.x2 > rightmost_x) {
+            rightmost_x = area.x2;
+            top_right   = entry;
+        }
+    }
+    assert(top_right != nullptr);
+    lv_group_focus_obj(top_right);
+    keypad_tap(root, LV_KEY_RIGHT);
+    auto *right_edge_target = lv_group_get_focused(group);
+    assert(right_edge_target != nullptr && right_edge_target != more_button);
+    const char *right_edge_name = lv_obj_get_name(right_edge_target);
+    assert(right_edge_name != nullptr && std::strcmp(right_edge_name, "files_entry_row") == 0);
+    assert_focused_border(right_edge_target);
+    lv_group_focus_obj(top_right);
+    keypad_tap(root, LV_KEY_UP);
+    assert(lv_group_get_focused(group) == top_right);
+    keypad_tap(root, LV_KEY_LEFT);
+    auto *left_entry = lv_group_get_focused(group);
+    assert(left_entry != nullptr);
+    const char *left_entry_name = lv_obj_get_name(left_entry);
+    assert(left_entry_name != nullptr && std::strcmp(left_entry_name, "files_entry_row") == 0);
+    lv_group_focus_obj(last_entry);
+    keypad_tap(root, LV_KEY_NEXT);
+    auto *home_search = require_named(root, "files_search_field");
+    assert(lv_group_get_focused(group) == more_button);
+    keypad_tap(root, LV_KEY_NEXT);
+    assert(lv_group_get_focused(group) == home_search);
+    assert(lv_obj_find_by_name(root, "files_keyboard") == nullptr);
+    // Tab moves onto the search entry. Enter activates it.
+    keypad_tap(root, LV_KEY_ENTER);
+    auto *navigation_search_input = require_named(root, "files_search_input");
+    assert(lv_group_get_focused(group) == navigation_search_input);
+    assert(!lv_obj_has_flag(require_named(root, "files_keyboard"), LV_OBJ_FLAG_HIDDEN));
+    click(root, "files_back_button");
+    assert_home(root);
+    more_button = require_named(root, "files_more_button");
+    lv_group_focus_obj(more_button);
+    keypad_tap(root, LV_KEY_NEXT);
+    home_search = require_named(root, "files_search_field");
+    assert(lv_group_get_focused(group) == home_search);
+    keypad_tap(root, LV_KEY_PREV);
+    assert(lv_group_get_focused(group) == more_button);
+    long_name = find_truncated_entry_row(root, long_folder_name, "ddd");
+    documents = find_entry_row(root, "Documents");
+    projects  = find_entry_row(root, "Projects");
+    lv_group_focus_obj(long_name);
+    settle(root);
+    assert_focused_border(long_name);
+    assert(lv_obj_get_height(long_name) > lv_obj_get_height(documents));
+    assert(lv_group_get_focused(group) == long_name);
+
+    // The icon grid follows its visual rows and columns. The long-name cell has
+    // a different height, so this also catches navigation based on child index.
+    keypad_tap(root, LV_KEY_RIGHT);
+    assert(lv_group_get_focused(group) == documents);
+    assert_focused_border(documents);
+    keypad_tap(root, LV_KEY_LEFT);
+    assert(lv_group_get_focused(group) == long_name);
+
+    keypad_tap(root, LV_KEY_DOWN);
+    auto *first_below = find_entry_row(root, portrait ? "audio-sample.mp3" : "report-00.txt");
+    assert(lv_group_get_focused(group) == first_below);
+    keypad_tap(root, LV_KEY_UP);
+    assert(lv_group_get_focused(group) == long_name);
+
+    keypad_tap(root, LV_KEY_RIGHT);
+    assert(lv_group_get_focused(group) == documents);
+    keypad_tap(root, LV_KEY_DOWN);
+    auto *second_below = find_entry_row(root, portrait ? "datasheet.pdf" : "report-01.txt");
+    assert(lv_group_get_focused(group) == second_below);
+    keypad_tap(root, LV_KEY_UP);
+    assert(lv_group_get_focused(group) == documents);
+
+    keypad_tap(root, LV_KEY_RIGHT);
+    assert(lv_group_get_focused(group) == projects);
+    keypad_tap(root, LV_KEY_DOWN);
+    auto *third_below = find_entry_row(root, portrait ? "README-large.txt" : "report-02.txt");
+    assert(lv_group_get_focused(group) == third_below);
+    keypad_tap(root, LV_KEY_UP);
+    assert(lv_group_get_focused(group) == projects);
+
+    // In list view the same directions walk the rows; right falls back to the
+    // next document-order row because all rows share one x coordinate.
+    click(root, "files_more_button");
+    click(root, "files_view_list");
+    documents = find_entry_row(root, "Documents");
+    projects  = find_entry_row(root, "Projects");
+    long_name = find_truncated_entry_row(root, long_folder_name, "ddd");
+    assert(lv_group_get_focused(group) == long_name);
+    assert_focused_border(long_name);
+    keypad_tap(root, LV_KEY_RIGHT);
+    assert(lv_group_get_focused(group) == documents);
+    assert_focused_border(documents);
+    keypad_tap(root, LV_KEY_DOWN);
+    assert(lv_group_get_focused(group) == projects);
+    keypad_tap(root, LV_KEY_UP);
+    assert(lv_group_get_focused(group) == documents);
+
+    // Restore icon view before testing Enter activation and search navigation.
+    click(root, "files_more_button");
+    click(root, "files_view_icons");
+    documents = find_entry_row(root, "Documents");
+    long_name = find_truncated_entry_row(root, long_folder_name, "ddd");
+    assert(lv_group_get_focused(group) == long_name);
+
+    // A short Enter opens a folder. Arrow keys stay within its entries;
+    // Shift-Tab reaches the Back button and Enter returns to the parent.
+    lv_group_focus_obj(documents);
+    keypad_tap(root, LV_KEY_ENTER);
+    assert_folder_named(root, "Documents", "Documents", true);
+    auto *folder_first_entry = lv_obj_get_child(require_named(root, "files_entry_list"), 0);
+    assert(folder_first_entry != nullptr);
+    lv_group_focus_obj(folder_first_entry);
+    keypad_tap(root, LV_KEY_UP);
+    assert(lv_group_get_focused(group) == folder_first_entry);
+    keypad_tap(root, LV_KEY_PREV);
+    auto *folder_back = require_named(root, "files_back_button");
+    assert(lv_group_get_focused(group) == folder_back);
+    keypad_tap(root, LV_KEY_ENTER);
+    assert_home(root);
+    documents = find_entry_row(root, "Documents");
+
+    // The same short Enter opens a file preview and does not show an operation menu.
+    auto *audio = find_entry_row(root, "audio-sample.mp3");
+    lv_group_focus_obj(audio);
+    keypad_tap(root, LV_KEY_ENTER);
+    assert(label_text(root, "files_preview_title") == "audio-sample.mp3");
+    assert(label_text(root, "files_preview_body") == "Preview is not available for this file type.");
+    assert(lv_obj_find_by_name(root, "files_action_menu") == nullptr);
+    click(root, "files_back_button");
+    assert_home(root);
+    documents = find_entry_row(root, "Documents");
+    lv_group_focus_obj(documents);
+
+    // Holding Enter opens the same context menu as a touch long press. The
+    // release after the menu appears must not activate the folder as well.
+    keypad_hold(root, LV_KEY_ENTER, 850);
+    assert_actions(root, "Documents");
+    assert(lv_obj_find_by_name(root, "files_nav_title") == nullptr ||
+           label_text(root, "files_nav_title") != "Documents");
+    // ESC dismisses the item menu without terminating the application.
+    runtime_escape_requested = false;
+    keypad_tap(root, LV_KEY_ESC);
+    assert(!runtime_escape_requested);
+    assert_home(root);
+
+    // Arrow keys stay on directory items at the top edge. Tab reaches the
+    // search entry, and Enter activates Search for the next character.
+    documents = find_entry_row(root, "Documents");
+    lv_group_focus_obj(documents);
+    keypad_tap(root, LV_KEY_UP);
+    assert(lv_group_get_focused(group) == documents);
+    more_button = require_named(root, "files_more_button");
+    lv_group_focus_obj(more_button);
+    keypad_tap(root, LV_KEY_NEXT);
+    auto *search_field = require_named(root, "files_search_field");
+    assert(lv_group_get_focused(group) == search_field);
+    assert(lv_obj_find_by_name(root, "files_search_input") == nullptr);
+    keypad_tap(root, LV_KEY_ENTER);
+    search_field = require_named(root, "files_search_field");
+    auto *input    = require_named(root, "files_search_input");
+    auto *keyboard = require_named(root, "files_keyboard");
+    assert(lv_group_get_focused(group) == input);
+    assert(lv_obj_has_state(input, LV_STATE_FOCUSED));
+    assert_focused_border(search_field);
+    assert(!lv_obj_has_flag(keyboard, LV_OBJ_FLAG_HIDDEN));
+    assert(lv_keyboard_get_textarea(keyboard) == input);
+
+    keypad_press(root, static_cast<std::uint32_t>('r'));
+    keypad_release(root, static_cast<std::uint32_t>('r'));
+    keypad_press(root, static_cast<std::uint32_t>('e'));
+    keypad_release(root, static_cast<std::uint32_t>('e'));
+    keypad_press(root, static_cast<std::uint32_t>('p'));
+    keypad_release(root, static_cast<std::uint32_t>('p'));
+    assert(std::string_view(lv_textarea_get_text(input)) == "rep");
+    assert(label_text(root, "files_result_count") == "24 results");
+    keypad_tap(root, LV_KEY_BACKSPACE);
+    assert(std::string_view(lv_textarea_get_text(input)) == "re");
+    assert(label_text(root, "files_result_count") == "25 results");
+
+    auto *search_results = require_named(root, "files_search_results");
+    auto *first_result   = lv_obj_get_child(search_results, 0);
+    assert(first_result != nullptr);
+    // Arrow keys do not move from the editable control to a result; Tab does.
+    keypad_tap(root, LV_KEY_DOWN);
+    assert(lv_group_get_focused(group) == input);
+    keypad_tap(root, LV_KEY_NEXT);
+    assert(lv_group_get_focused(group) == first_result);
+    assert_focused_border(first_result);
+    assert(!lv_obj_has_state(search_field, LV_STATE_FOCUSED));
+    keypad_tap(root, LV_KEY_UP);
+    assert(lv_group_get_focused(group) == first_result);
+    keypad_tap(root, LV_KEY_PREV);
+    assert(lv_group_get_focused(group) == input);
+    assert_focused_border(search_field);
+
+    // Resizing keeps the same focused textarea, keyboard and query.
+    const int old_width = active_width;
+    const int old_height = active_height;
+    active_width  = old_height;
+    active_height = old_width;
+    lv_display_set_resolution(display, active_width, active_height);
+    settle(root);
+    assert(require_named(root, "files_search_input") == input);
+    assert(require_named(root, "files_keyboard") == keyboard);
+    assert(lv_group_get_focused(group) == input);
+    assert(std::string_view(lv_textarea_get_text(input)) == "re");
+    assert(!lv_obj_has_flag(keyboard, LV_OBJ_FLAG_HIDDEN));
+    assert_keyboard_geometry(root, keyboard, false);
+
+    active_width  = old_width;
+    active_height = old_height;
+    lv_display_set_resolution(display, active_width, active_height);
+    settle(root);
+    assert(require_named(root, "files_search_input") == input);
+    assert(lv_group_get_focused(group) == input);
+    assert(render_has_contrast(display, active_width, active_height));
+    assert(write_ppm(output_path, width, height));
+    keypad_tap(root, LV_KEY_ESC);
+    assert_home(root);
+    close_app(descriptor, context);
 }
 
 void open_app(const cm0_app_descriptor_t *descriptor, cm0_app_context_t &context, std::string_view root_path)
@@ -1938,6 +2407,25 @@ int main(int argc, char **argv)
     lv_indev_set_read_cb(touch_screen, read_pointer);
     lv_indev_set_display(touch_screen, display);
 
+    lv_group_t *keyboard_group = nullptr;
+    lv_indev_t *keypad_device  = nullptr;
+    if (scenario == "keyboard") {
+        // Match the AppKit runtime: create the default focus group before the
+        // application builds its buttons and attach a real keypad indev to it.
+        keyboard_group = lv_group_create();
+        assert(keyboard_group != nullptr);
+        lv_group_set_default(keyboard_group);
+        keypad.key   = LV_KEY_ENTER;
+        keypad.state = LV_INDEV_STATE_RELEASED;
+        keypad_device = lv_indev_create();
+        assert(keypad_device != nullptr);
+        lv_indev_set_type(keypad_device, LV_INDEV_TYPE_KEYPAD);
+        lv_indev_set_read_cb(keypad_device, read_keypad);
+        lv_indev_set_display(keypad_device, display);
+        lv_indev_set_group(keypad_device, keyboard_group);
+        lv_indev_add_event_cb(keypad_device, runtime_escape_guard, LV_EVENT_KEY, nullptr);
+    }
+
     // Recreate the AppKit chrome used by the production runtime so exported
     // preview images include the clock, connectivity, battery, and home
     // indicator surrounding the application content.
@@ -1964,6 +2452,8 @@ int main(int argc, char **argv)
     assert(descriptor != nullptr);
     if (scenario == "boundaries") {
         exercise_boundary_matrix(descriptor, context, display, width, height, argv[4]);
+    } else if (scenario == "keyboard") {
+        exercise_keyboard(descriptor, context, display, keyboard_group, fixture, width, height, argv[4]);
     } else {
         open_app(descriptor, context, fixture.root().string());
         exercise_all_reachable_pages(display, context.root, fixture, width, height);
@@ -1978,6 +2468,11 @@ int main(int argc, char **argv)
     }
 
     lilygo::ui::files::set_root({});
+    if (keypad_device) lv_indev_delete(keypad_device);
+    if (keyboard_group) {
+        lv_group_set_default(nullptr);
+        lv_group_delete(keyboard_group);
+    }
     lv_indev_delete(touch_screen);
     lv_obj_delete(status_bar);
     lv_obj_delete(home_indicator);

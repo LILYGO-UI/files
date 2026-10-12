@@ -20,6 +20,20 @@
 所选项目复制副本、移动或删除，其菜单可拷贝所选项目、用它们新建文件夹或压缩为一个
 归档。应用不提供共享、标签和收藏。
 
+右上角“更多”菜单中的“Help”打开应用内可滚动帮助页，说明浏览文件夹、打开和预览文件、
+搜索与排序、选择项目以及常用文件操作。关闭帮助页后返回原目录，并保留原来的显示方式、
+排序、搜索内容和滚动位置。
+
+使用键盘时，方向键只在当前目录或搜索结果中的文件、文件夹之间移动焦点：左右键移动到
+前一个或后一个项目，图标视图中的上下键按网格行移动，列表视图中的上下键按列表行移动；
+到达边界时焦点仍留在文件和文件夹项目集合内。短按 `Enter` 打开当前文件或进入当前文件夹；长按 `Enter` 打开该
+项目的详细操作菜单，释放按键后不会再次打开项目。`Tab` 负责在控件之间切换焦点，包括搜索
+入口和搜索结果。搜索框接收键盘字符和退格键并实时刷新结果。搜索结果和选择模式中的项目
+继续遵循原有规则，长按不会打开上下文菜单。打开“更多”或文件操作菜单时按 `Esc` 只关闭菜单，应用继续运行。
+
+在 Help 页面中，方向键在关闭按钮和各操作分组之间移动焦点，到达内容边界后继续滚动视口；
+`Tab`/`Shift-Tab` 遵循相同的焦点顺序，并自动将当前分组滚动到可见区域。
+
 Files 页面采用 C++17 的 `View -> ViewModel -> Model` 依赖方向。`FilesModel`
 负责文件系统访问和领域规则且不依赖 LVGL；`FilesViewModel` 通过 LVGL Subject
 发布展示状态；`FilesView` 创建响应式 LVGL 界面并转发命令。界面直接使用 LVGL
@@ -123,6 +137,7 @@ Debian 打包规则会安装可执行文件、Launcher manifest、desktop 文件
 - `src/pages/files/files_model.cpp`：文件系统访问、状态和领域规则
 - `src/pages/files/files_view_model.cpp`：展示 DTO、命令和 Subject
 - `src/pages/files/files_view.cpp`：响应式 LVGL widget 和事件转发
+- `src/pages/help/`：不依赖 Model 的可滚动 Help 页面和静态操作说明
 - `src/components/`：共享语义样式和 Subject 生命周期辅助工具
 - `simulated-home/`：用于交互调试的主机端文件系统 fixture
 - `data/`：通用 Launcher、desktop 和 AppStream 模板以及默认配置

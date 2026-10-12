@@ -9,9 +9,12 @@
 #include <cstddef>
 #include <string>
 
+using FilesHelpCallback = void (*)(void *user_data);
+
 class FilesView {
 public:
-    explicit FilesView(FilesViewModel &view_model) noexcept;
+    explicit FilesView(FilesViewModel &view_model, FilesHelpCallback help_callback = nullptr,
+                       void *help_user_data = nullptr) noexcept;
     ~FilesView() noexcept;
 
     FilesView(const FilesView &)            = delete;
@@ -21,6 +24,7 @@ public:
 
     lv_obj_t *create(lv_obj_t *parent);
     void destroy() noexcept;
+    void set_visible(bool visible) noexcept;
 
 private:
     enum class RowSource : std::int32_t {
@@ -43,11 +47,15 @@ private:
     static void content_changed(lv_observer_t *observer, lv_subject_t *subject);
     static void render_async(void *user_data);
     static void place_async(void *user_data);
+    static void key_remap_timer_tick(lv_timer_t *timer);
     static void size_changed(lv_event_t *event);
     static void back_clicked(lv_event_t *event);
     static void more_clicked(lv_event_t *event);
+    static void help_clicked(lv_event_t *event);
     static void search_clicked(lv_event_t *event);
+    static void search_field_key_pressed(lv_event_t *event);
     static void row_clicked(lv_event_t *event);
+    static void row_key_pressed(lv_event_t *event);
     static void row_long_pressed(lv_event_t *event);
     static void action_clicked(lv_event_t *event);
     static void paste_clicked(lv_event_t *event);
@@ -56,7 +64,9 @@ private:
     static void move_up_clicked(lv_event_t *event);
     static void move_confirm_clicked(lv_event_t *event);
     static void query_changed(lv_event_t *event);
+    static void menu_key_pressed(lv_event_t *event);
     static void search_input_activated(lv_event_t *event);
+    static void search_input_deactivated(lv_event_t *event);
     static void keyboard_done(lv_event_t *event);
     static void select_mode_clicked(lv_event_t *event);
     static void select_all_clicked(lv_event_t *event);
@@ -75,6 +85,8 @@ private:
 
     void schedule_render() noexcept;
     void schedule_placement() noexcept;
+    void configure_key_remap(bool enabled) noexcept;
+    static lv_key_t remap_key(lv_indev_t *indev, lv_key_t key);
     void render();
     [[nodiscard]] std::string content_key() const;
     void clear_page_references() noexcept;
@@ -120,6 +132,8 @@ private:
     MenuBinding *bind_menu(std::int32_t value) noexcept;
     void create_divider(lv_obj_t *parent);
     void create_directory_content(lv_obj_t *scroll);
+    void focus_first_entry() noexcept;
+    void focus_overlay_control() noexcept;
     void create_underlay();
     void create_scrim(lv_opa_t opacity);
     void refresh_selection() noexcept;
@@ -139,6 +153,8 @@ private:
     void refresh_search_results();
 
     FilesViewModel &view_model_;
+    FilesHelpCallback help_callback_ = nullptr;
+    void *help_user_data_            = nullptr;
     lv_obj_t *surface_          = nullptr;
     lv_obj_t *frame_            = nullptr;
     lv_obj_t *page_             = nullptr;
@@ -167,6 +183,7 @@ private:
     std::array<MenuBinding, 12> menu_bindings_{};
     std::size_t menu_binding_count_ = 0;
     std::string render_key_;
+    FilesScreen rendered_screen_ = FilesScreen::Home;
     // Where the directory content last shown was scrolled to, kept until the same content returns.
     std::string scroll_key_;
     std::int32_t scroll_y_       = 0;
@@ -177,6 +194,11 @@ private:
     bool placement_pending_      = false;
     bool suppress_render_        = false;
     bool updating_input_         = false;
+    bool visible_                = true;
+    lv_timer_t *key_remap_timer_ = nullptr;
+    static FilesView *key_remap_view_;
+    static lv_indev_t *key_remap_indev_;
+    static bool key_remap_active_;
 };
 
 #endif

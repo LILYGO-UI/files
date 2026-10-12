@@ -28,7 +28,8 @@ add_library(lilygo_ui_files_ui STATIC
     src/components/components.cpp
     src/pages/files/files_icons.cpp
     src/pages/files/files_view.cpp
-    src/pages/files/files_view_model.cpp)
+    src/pages/files/files_view_model.cpp
+    src/pages/help/help_view.cpp)
 target_include_directories(lilygo_ui_files_ui PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_compile_options(lilygo_ui_files_ui PRIVATE -Wall -Wextra -Wpedantic)
@@ -93,7 +94,7 @@ if(BUILD_TESTING AND NOT CMAKE_CROSSCOMPILING)
             set(_height 568)
         endif()
         foreach(scenario IN ITEMS home folder search preview more new-folder list select
-                select-menu select-move select-delete actions info move rename delete)
+                select-menu select-move select-delete actions info move rename delete help keyboard)
             add_test(NAME files-render-${viewport}-${scenario}
                 COMMAND files-render-ui
                     ${_width} ${_height} ${scenario}
