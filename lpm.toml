@@ -2,7 +2,7 @@ schema_version = 1
 
 [project]
 package = "lilygo-ui-files"
-version = "0.1.1"
+version = "0.1.2"
 app_id = "cc.lilygo.ui.Files"
 title = "Files"
 summary = "Browse and manage files on LILYGO UI."
