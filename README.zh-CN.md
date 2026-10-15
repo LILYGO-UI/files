@@ -126,8 +126,11 @@ Debian 打包规则会安装可执行文件、Launcher manifest、desktop 文件
 元数据、应用图标、默认配置和 AppKit 字体声明。版本、供应商、主页、目标架构和
 最低 AppKit 依赖均从 `lpm.toml` 派生。
 
-在目标设备上，软件包提供的系统配置会将文件根目录设为 `/home/pi`。可以通过
-`--root`、`LILYGO_UI_FILES_ROOT` 或上述用户/系统配置文件覆盖该值。
+在目标设备上，软件包提供的系统配置不指定文件根目录，应用默认使用当前运行用户
+的主目录（优先使用 `$HOME`，未设置时查询用户账户的主目录）。可以通过
+`--root`、`LILYGO_UI_FILES_ROOT` 或上述用户/系统配置文件覆盖该值。已有设备若在
+`/etc/lilygo/ui/files.conf` 中保留了 `files.root=/home/pi`，删除或注释该行后即可
+恢复使用当前用户主目录。
 
 ## 源码结构
 

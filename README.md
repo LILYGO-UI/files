@@ -147,9 +147,13 @@ The Debian packaging rules install the executable, Launcher manifest, desktop
 file, AppStream metadata, app icon, default configuration, and AppKit font
 notices. Version, vendor, homepage, target architecture, and the minimum AppKit
 dependency are derived from `lpm.toml`.
-On the target, the packaged system configuration sets the file root to
-`/home/pi`. It can be overridden with `--root`, `LILYGO_UI_FILES_ROOT`, or the
-user/system configuration files described above.
+On the target, the packaged system configuration leaves the file root unset,
+so the application uses the current user's home directory (`$HOME`, or the
+account's home directory when `$HOME` is unset). It can be overridden with
+`--root`, `LILYGO_UI_FILES_ROOT`, or the user/system configuration files
+described above. If an existing installation still has `files.root=/home/pi`
+in `/etc/lilygo/ui/files.conf`, remove or comment out that line to use the
+current user's home directory.
 
 ## GPU renderer builds
 

@@ -82,8 +82,10 @@ Desktop/AppStream  cc.lilygo.ui.Files
 files.root=/absolute/path
 ```
 
-配置值必须是绝对路径。设备包提供的系统默认值为 `/home/pi`。`--root` 是数据
-边界配置，不是界面展示模式；应用不得提供 phone、desktop、横屏或竖屏模式开关。
+配置值必须是绝对路径。设备包不设置 `files.root`，默认使用当前运行用户的主目录，
+不假定设备存在 `pi` 用户。已有安装若仍配置 `files.root=/home/pi`，需删除或注释
+该行才能恢复默认行为。`--root` 是数据边界配置，不是界面展示模式；应用不得提供
+phone、desktop、横屏或竖屏模式开关。
 
 ## 架构
 
