@@ -147,3 +147,28 @@ Debian 打包规则会安装可执行文件、Launcher manifest、desktop 文件
 - `tests/`：Model、ViewModel/Subject 和无头响应式渲染测试
 
 打包时会安装 128x128 RGBA 格式的 `assets/app-icon.png`。
+
+### 使用 LPM 构建 K230 Debian riscv64
+
+需要包含 K230 和 macOS LLVM 支持的 AppKit 源码 SDK。当前工作区可共用
+`../cm0-appkit`，准备一次 sysroot，再为本应用选择 SDK：
+
+```sh
+brew install llvm lld dpkg
+python3 ../cm0-appkit/tools/prepare-riscv64-sysroot.py
+cmake --preset k230-debian -DLilyGoUI_DIR="$PWD/../cm0-appkit"
+lpm pack --arch riscv64
+```
+
+输出为 `dist/<package>_<version>_riscv64.deb`。配置会记住 SDK 路径，后续运行
+`lpm pack --arch riscv64` 即可。支持保存目标的 LPM 版本也可先运行
+`lpm set-target k230`，之后只运行 `lpm pack`。
+`lpm pack --arch arm64` 构建原有 CM0 目标；两套 sysroot 都准备好后可运行
+`lpm pack --all-architectures`。
+
+独立检出时，请将 `third_party/cm0-appkit` 固定到包含这些功能的兼容发布版本，
+并在准备和配置命令中使用该目录。首次配置默认使用子模块，也可通过
+`LILYGO_UI_APPKIT_DIR` 环境变量指定 SDK。Linux 使用 `riscv64-linux-gnu-gcc/g++`
+交叉编译器和同一准备脚本。默认 sysroot 在所选 SDK 的
+`.cache/k230-debian/sysroot`，可用
+`-DLILYGO_UI_DEBIAN_SYSROOT=/path/to/sysroot` 覆盖。该 Debian 目标不能使用 Buildroot sysroot。

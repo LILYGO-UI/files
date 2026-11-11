@@ -198,3 +198,30 @@ release renderer.
 - `tests/`: Model, ViewModel/Subject, and headless responsive render tests
 
 Packaging installs the 128x128 RGBA `assets/app-icon.png`.
+
+### K230 Debian riscv64 with LPM
+
+Use an AppKit source SDK containing K230 and macOS LLVM support. In this
+workspace, prepare the shared SDK once and select it for this application:
+
+```sh
+brew install llvm lld dpkg
+python3 ../cm0-appkit/tools/prepare-riscv64-sysroot.py
+cmake --preset k230-debian -DLilyGoUI_DIR="$PWD/../cm0-appkit"
+lpm pack --arch riscv64
+```
+
+The package is written to `dist/<package>_<version>_riscv64.deb`. The preset
+keeps the SDK selection; subsequent builds only need `lpm pack --arch riscv64`.
+With an LPM version supporting saved targets, run `lpm set-target k230` once
+and then use `lpm pack` directly. `lpm pack --arch arm64` selects the original
+CM0 build; `lpm pack --all-architectures` builds both when both sysroots are ready.
+
+For a standalone checkout, update the pinned `third_party/cm0-appkit` to a
+compatible published revision and use that SDK path instead of `../cm0-appkit`
+in both preparation and configuration commands. Fresh configurations default to
+the pinned SDK; `LILYGO_UI_APPKIT_DIR` can override that initial selection.
+On Linux, install `riscv64-linux-gnu-gcc/g++` and run the same preparation script.
+The default Debian development sysroot is `.cache/k230-debian/sysroot` inside
+the selected SDK; override it with `-DLILYGO_UI_DEBIAN_SYSROOT=/path/to/sysroot`.
+Buildroot sysroots are not compatible with this Debian target.
