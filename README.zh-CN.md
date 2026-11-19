@@ -150,25 +150,12 @@ Debian 打包规则会安装可执行文件、Launcher manifest、desktop 文件
 
 ### 使用 LPM 构建 K230 Debian riscv64
 
-需要包含 K230 和 macOS LLVM 支持的 AppKit 源码 SDK。当前工作区可共用
-`../cm0-appkit`，准备一次 sysroot，再为本应用选择 SDK：
+Linux 主机安装 `gcc-riscv64-linux-gnu` 和 `g++-riscv64-linux-gnu`，macOS 主机用 `brew install llvm lld dpkg` 安装交叉编译和打包工具。在应用仓库根目录运行打包命令。
 
 ```sh
-brew install llvm lld dpkg
-python3 ../cm0-appkit/tools/prepare-riscv64-sysroot.py
-cmake --preset k230-debian -DLilyGoUI_DIR="$PWD/../cm0-appkit"
 lpm pack --arch riscv64
 ```
 
-输出为 `dist/<package>_<version>_riscv64.deb`。配置会记住 SDK 路径，后续运行
-`lpm pack --arch riscv64` 即可。支持保存目标的 LPM 版本也可先运行
-`lpm set-target k230`，之后只运行 `lpm pack`。
-`lpm pack --arch arm64` 构建原有 CM0 目标；两套 sysroot 都准备好后可运行
-`lpm pack --all-architectures`。
+`k230-debian` CMake 预设首次配置时从 `LILYGO-UI/canaan-gen` Release 下载固定版本的 Debian BSP，校验 SHA-256，并将压缩包和 `sysroot/` 保存在当前项目的 `.cache/k230-bsp/20261116T104343Z/`。之后可以离线打包，重新生成 `build/` 也会复用缓存。生成的 `.deb` 在 `dist/` 目录。
 
-独立检出时，请将 `third_party/cm0-appkit` 固定到包含这些功能的兼容发布版本，
-并在准备和配置命令中使用该目录。首次配置默认使用子模块，也可通过
-`LILYGO_UI_APPKIT_DIR` 环境变量指定 SDK。Linux 使用 `riscv64-linux-gnu-gcc/g++`
-交叉编译器和同一准备脚本。默认 sysroot 在所选 SDK 的
-`.cache/k230-debian/sysroot`，可用
-`-DLILYGO_UI_DEBIAN_SYSROOT=/path/to/sysroot` 覆盖。该 Debian 目标不能使用 Buildroot sysroot。
+执行一次 `lpm set-target k230` 后，后续直接运行 `lpm pack`。如需自定义 Debian sysroot，在首次配置前设置 `LILYGO_UI_DEBIAN_SYSROOT`，或向 CMake 传入 `-DLILYGO_UI_DEBIAN_SYSROOT=/path/to/sysroot`。AppKit 默认使用 `third_party/cm0-appkit`，可用 `-DLilyGoUI_DIR=/path/to/appkit` 指定其他版本。
